@@ -1,0 +1,8 @@
+rapidocr==3.9.2
+onnxruntime==1.30.0
+opencv-python
+numpy
+Pillow
+customtkinter>=5.0
+ttkthemes
+pywin32; sys_platform == "win32"
