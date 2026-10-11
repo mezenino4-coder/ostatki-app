@@ -25,20 +25,25 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt pyinstaller
 
-      - name: Build exe
+      - name: Build exe (folder)
         run: pyinstaller ostatki.spec --noconfirm
+
+      - name: Package folder to zip
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist/OstatkiSklada/* -DestinationPath dist/OstatkiSklada.zip -Force
 
       - name: Upload to release
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: *** secrets.GITHUB_TOKEN }}
         shell: pwsh
         run: |
           gh release delete v1.0.0 --yes --cleanup-tag 2>$null
-          gh release create v1.0.0 dist/*.exe --title "Остатки склада" --notes "Готовый exe для Windows (Python не нужен)."
+          gh release create v1.0.0 dist/OstatkiSklada.zip --title "Остатки склада" --notes "Архив с программой (папка). Распаковать в удобное место; базы (ostatki.db, ostatki_po_skladu.tsv) лежат рядом с exe и при обновлении не трогаются."
 
       - name: Verify release is public
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: *** secrets.GITHUB_TOKEN }}
         shell: pwsh
         run: |
           gh release view v1.0.0 --repo mezenino4-coder/ostatki-app --json isDraft,isPrerelease,assets --jq '{draft:.isDraft, pre:.isPrerelease, assets:(.assets|map(.name))}'

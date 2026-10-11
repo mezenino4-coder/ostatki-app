@@ -1,5 +1,9 @@
 # -*- mode: python ; coding: utf-8 -*-
-# PyInstaller spec: собирает приложение + модели OCR + иконки в один .exe.
+# PyInstaller spec: собирает приложение ПАПКОЙ (onedir), а не одним файлом.
+#   dist/OstatkiSklada/
+#     OstatkiSklada.exe      <- обновляешь только это (+ _internal)
+#     ostatki.db             <- база, лежит рядом, НЕ трогается при обновлении exe
+#     ostatki_po_skladu.tsv  <- старая база, рядом
 # Запускать на Windows:  pyinstaller ostatki.spec
 import os
 from PyInstaller.utils.hooks import collect_all
@@ -45,13 +49,22 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
     [],
+    exclude_binaries=True,
     name="OstatkiSklada",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
     console=False,
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    name="OstatkiSklada",
 )
