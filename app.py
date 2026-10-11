@@ -309,6 +309,24 @@ class App:
         self.log(f"Пополнение: {len(items)} строк, {unique_count} уникальных деталей"
                  + (f" ({len(dups)} дублей объединено)" if dups else "")
                  + f", отправитель {source_name or 'не определён'}")
+
+        # позиции, уже лежащие в новой базе — показать адрес и НФ-код
+        seen: dict[str, object] = {}
+        for it in items:
+            if it.code in seen:
+                continue
+            ex = self.store.new_get(it.code)
+            if ex is not None:
+                seen[it.code] = ex
+        if seen:
+            lines = []
+            for code, ex in seen.items():
+                lines.append(f"• {ex.raw or ex.name or code} — ячейка {ex.cell or '—'}, НФ-код {ex.nf_code or '—'}")
+            messagebox.showinfo(
+                "Уже на складе",
+                f"{len(seen)} из {unique_count} позиций уже есть в {NEW_WAREHOUSE}.\n"
+                f"Количество будет прибавлено в существующую ячейку:\n\n" + "\n".join(lines))
+
         if not result.ok:
             msg = ["Расхождения сверки ячейки Центрального склада:"]
             for c in result.cell_checks:
