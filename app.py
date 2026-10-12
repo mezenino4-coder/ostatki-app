@@ -14,7 +14,9 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
+import tempfile
 import threading
 import tkinter as tk
 import tkinter.font as tkfont
@@ -134,6 +136,117 @@ def _setup_style(root: tk.Tk) -> None:
         pass
 
 
+def _clipboard_image_to_file() -> str | None:
+    """Прочитать изображение из буфера обмена и сохранить во временный файл.
+
+    Возвращает путь к файлу или None, если в буфере нет картинки.
+    Пробует X11 (xclip) и Wayland (wl-paste), оба формата PNG/JPEG.
+    """
+    data = None
+    ext = ".png"
+    for cmd in (["xclip", "-selection", "clipboard", "-t", "image/png", "-o"],
+                ["xclip", "-selection", "clipboard", "-t", "image/jpeg", "-o"],
+                ["wl-paste", "--type", "image/png"],
+                ["wl-paste", "--type", "image/jpeg"]):
+        try:
+            p = subprocess.run(cmd, capture_output=True, timeout=10)
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            continue
+        if p.returncode == 0 and p.stdout:
+            data = p.stdout
+            if data.startswith(b"\xff\xd8\xff"):
+                ext = ".jpg"
+            break
+    if not data or len(data) < 100:
+        return None
+    fd, path = tempfile.mkstemp(suffix=ext, prefix="ostatki_paste_")
+    with os.fdopen(fd, "wb") as f:
+        f.write(data)
+    return path
+
+
+class MovePasteDialog(ctk.CTkToplevel):
+    """Окно добавления скриншотов перемещения: вставка из буфера (Ctrl+V) или файл."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.title("Пополнение — скрин перемещения")
+        self.geometry("680x440")
+        self.paths: list[str] = []
+        self.transient(parent)
+        self.grab_set()
+
+        ctk.CTkLabel(self, text="Скрин перемещения",
+                     font=_ctkfont(16, "bold"), text_color=INK).pack(pady=(22, 2))
+        ctk.CTkLabel(self, text="Нажмите Ctrl+V — вставится картинка из буфера обмена.\nИли выберите файл. Можно добавить несколько (например, 2 страницы).",
+                     font=_ctkfont(12), text_color=MUTED, justify="center").pack(pady=(0, 12))
+
+        self.preview_lbl = ctk.CTkLabel(self, text="Превью появится здесь",
+                                        width=520, height=190, fg_color=SOFT_BG,
+                                        corner_radius=10, text_color=MUTED,
+                                        font=_ctkfont(12))
+        self.preview_lbl.pack(padx=24, pady=(0, 10))
+
+        self.count_lbl = ctk.CTkLabel(self, text="Скриншотов: 0",
+                                      font=_ctkfont(12, "bold"), text_color=INK)
+        self.count_lbl.pack(pady=(0, 12))
+
+        btns = ctk.CTkFrame(self, fg_color="transparent")
+        btns.pack(fill="x", padx=24, pady=(0, 20))
+        _secondary_button(btns, "Отмена", self._cancel, width=100).pack(side="right", padx=4)
+        ctk.CTkButton(btns, text="Распознать", command=self._ok, width=130).pack(side="right", padx=4)
+        _secondary_button(btns, "Выбрать файл…", self._pick_file, width=140).pack(side="right", padx=4)
+        ctk.CTkButton(btns, text="Вставить (Ctrl+V)", command=self._paste, width=160).pack(side="left", padx=4)
+
+        self._preview_img = None
+        self.bind("<Control-v>", self._on_paste_key)
+        self.bind("<Control-V>", self._on_paste_key)
+        self.after(80, self.focus_set)
+
+    def _on_paste_key(self, e=None):
+        self._paste()
+        return "break"
+
+    def _paste(self):
+        p = _clipboard_image_to_file()
+        if p is None:
+            messagebox.showwarning("Буфер пуст",
+                                   "В буфере обмена нет изображения.\nСделайте скриншот (Print Screen) и нажмите Ctrl+V.",
+                                   parent=self)
+            return
+        self._add_path(p)
+
+    def _pick_file(self):
+        paths = filedialog.askopenfilenames(
+            title="Скрин(ы) перемещения (Print Screen)",
+            filetypes=[("Изображения", "*.jpg *.jpeg *.png *.bmp"), ("Все", "*.*")],
+            parent=self)
+        for p in paths:
+            self._add_path(p)
+
+    def _add_path(self, p):
+        if p not in self.paths:
+            self.paths.append(p)
+        self.count_lbl.configure(text=f"Скриншотов: {len(self.paths)}")
+        self._show_preview(p)
+
+    def _show_preview(self, path):
+        try:
+            img = Image.open(path)
+            img.thumbnail((520, 190))
+            self._preview_img = ctk.CTkImage(img, size=(img.width, img.height))
+            self.preview_lbl.configure(image=self._preview_img, text="")
+        except Exception:
+            self.preview_lbl.configure(text="(превью недоступно)", image=None)
+
+    def _ok(self):
+        self.destroy()
+
+    def _cancel(self):
+        self.paths = []
+        self.destroy()
+
+
 class App:
     def __init__(self, root):
         self.root = root
@@ -241,9 +354,9 @@ class App:
 
     # ---------- 2. пополнение (перемещение) ----------
     def load_move(self):
-        paths = filedialog.askopenfilenames(
-            title="Скрин(ы) перемещения (Print Screen)",
-            filetypes=[("Изображения", "*.jpg *.jpeg *.png *.bmp"), ("Все", "*.*")])
+        dlg = MovePasteDialog(self.root)
+        self.root.wait_window(dlg)
+        paths = dlg.paths
         if not paths:
             return
 
