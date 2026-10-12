@@ -140,8 +140,25 @@ def _clipboard_image_to_file() -> str | None:
     """Прочитать изображение из буфера обмена и сохранить во временный файл.
 
     Возвращает путь к файлу или None, если в буфере нет картинки.
-    Пробует X11 (xclip) и Wayland (wl-paste), оба формата PNG/JPEG.
+    Windows/macOS — через PIL ImageGrab; Linux — xclip (X11) / wl-paste (Wayland).
     """
+    # Windows/macOS: PIL ImageGrab
+    try:
+        from PIL import ImageGrab
+        item = ImageGrab.grabclipboard()
+        if isinstance(item, Image.Image):
+            fd, path = tempfile.mkstemp(suffix=".png", prefix="ostatki_paste_")
+            with os.fdopen(fd, "wb") as f:
+                item.save(f, format="PNG")
+            return path
+        if isinstance(item, (list, tuple)):
+            for fp in item:
+                if isinstance(fp, str) and fp.lower().endswith((".png", ".jpg", ".jpeg", ".bmp")):
+                    return fp
+    except Exception:
+        pass
+
+    # Linux: xclip (X11) и wl-paste (Wayland)
     data = None
     ext = ".png"
     for cmd in (["xclip", "-selection", "clipboard", "-t", "image/png", "-o"],
