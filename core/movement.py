@@ -116,19 +116,27 @@ def analyze_movement(store: Store, items: list[MoveItem],
     return result
 
 
-def apply_movement(store: Store, result: MoveResult, confirm_force: bool = False):
+def apply_movement(store: Store, result: MoveResult, confirm_force: bool = False,
+                   cell_map: dict[str, str] | None = None):
     """Физически провести перемещение.
 
     - source == "central": для каждой сверенной ячейки — если состав совпал
       1-в-1 ИЛИ подтверждено «провести всё равно» — удаляем ячейку из старой
       базы; при расхождении без подтверждения эту ячейку не списываем.
     - приход в новую базу — всегда (для всех позиций).
+
+    cell_map — решение пользователя по деталям, которые уже есть на складе:
+    код -> итоговая ячейка. Если кода нет в карте, используется ячейка из
+    документа (it.cell), а если деталь уже лежит в этой ячейке — количество
+    прибавляется туда, иначе создаётся строка в новой ячейке.
     """
+    cell_map = cell_map or {}
     if result.source == "central":
         for c in result.cell_checks:
             if c.ok or confirm_force:
                 store.delete_old_cell(c.cell)
 
     for it in result.items:
-        store.new_upsert(it.code, it.raw, "", it.cell, it.qty, it.nf_code)
+        cell = cell_map.get(it.code, it.cell)
+        store.new_upsert(it.code, it.raw, "", cell, it.qty, it.nf_code)
     return True

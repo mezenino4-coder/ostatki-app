@@ -264,6 +264,84 @@ class MovePasteDialog(ctk.CTkToplevel):
         self.destroy()
 
 
+class ReplenishChoiceDialog(ctk.CTkToplevel):
+    """Выбор ячейки для деталей, которые уже есть на синем складе."""
+
+    def __init__(self, parent, existing: list[dict]):
+        super().__init__(parent)
+        self.title("Детали уже есть на складе")
+        self.geometry("760x540")
+        self.result: dict[str, str] = {}  # code -> cell
+        self.transient(parent)
+        self.grab_set()
+
+        ctk.CTkLabel(self, text="Эти детали уже есть на складе. Куда добавить?",
+                     font=_ctkfont(15, "bold"), text_color=INK).pack(anchor="w", padx=24, pady=(20, 2))
+        ctk.CTkLabel(self, text="Для каждой — в существующую ячейку или в новую.",
+                     font=_ctkfont(12), text_color=MUTED).pack(anchor="w", padx=24, pady=(0, 10))
+
+        scroll = ctk.CTkScrollableFrame(self, width=700, height=400)
+        scroll.pack(fill="both", expand=True, padx=24, pady=8)
+
+        self._rows = []
+        for ex in existing:
+            self._rows.append(self._make_row(scroll, ex))
+
+        btns = ctk.CTkFrame(self, fg_color="transparent")
+        btns.pack(fill="x", padx=24, pady=(6, 20))
+        _secondary_button(btns, "Отмена", self._cancel, width=110).pack(side="right", padx=4)
+        ctk.CTkButton(btns, text="Применить", command=self._ok, width=130).pack(side="right", padx=4)
+
+    def _make_row(self, scroll, ex):
+        frame = ctk.CTkFrame(scroll, fg_color=CARD_BG, border_width=1,
+                             border_color=BORDER, corner_radius=10)
+        frame.pack(fill="x", pady=5)
+        ctk.CTkLabel(frame, text=ex["label"], font=_ctkfont(12, "bold"),
+                     text_color=INK, anchor="w").pack(fill="x", padx=12, pady=(10, 2))
+        line = ctk.CTkFrame(frame, fg_color="transparent")
+        line.pack(fill="x", padx=12, pady=(0, 10))
+        cells = ex["cells"]
+        values = cells + ["новая ячейка…"]
+        var = tk.StringVar(value=cells[0] if cells else "новая ячейка…")
+        combo = ctk.CTkComboBox(line, values=values, variable=var, width=250,
+                                font=_ctkfont(12))
+        combo.pack(side="left")
+        entry = ctk.CTkEntry(line, placeholder_text="номер новой ячейки", width=180,
+                             font=_ctkfont(12))
+        entry.pack(side="left", padx=8)
+        _bind_edit_shortcuts(entry)
+        if cells:
+            entry.configure(state="disabled")
+
+        def on_change(v, var=var, entry=entry):
+            if v == "новая ячейка…":
+                entry.configure(state="normal")
+            else:
+                entry.configure(state="disabled")
+        combo.configure(command=on_change)
+        return {"code": ex["code"], "label": ex["label"], "var": var, "entry": entry}
+
+    def _ok(self):
+        for r in self._rows:
+            code = r["code"]
+            v = r["var"].get()
+            if v == "новая ячейка…":
+                cell = r["entry"].get().strip()
+                if not cell:
+                    messagebox.showwarning("Ошибка",
+                                           f"Укажите новую ячейку для «{r['label']}».",
+                                           parent=self)
+                    return
+                self.result[code] = cell
+            else:
+                self.result[code] = v
+        self.destroy()
+
+    def _cancel(self):
+        self.result = {}
+        self.destroy()
+
+
 class App:
     def __init__(self, root):
         self.root = root
@@ -440,22 +518,27 @@ class App:
                  + (f" ({len(dups)} дублей объединено)" if dups else "")
                  + f", отправитель {source_name or 'не определён'}")
 
-        # позиции, уже лежащие в новой базе — показать адрес и НФ-код
-        seen: dict[str, object] = {}
+        # позиции, уже лежащие в новой базе — спросить, куда добавить
+        existing: list[dict] = []
+        seen_codes: set[str] = set()
         for it in items:
-            if it.code in seen:
+            if it.code in seen_codes:
                 continue
-            ex = self.store.new_get(it.code)
-            if ex is not None:
-                seen[it.code] = ex
-        if seen:
-            lines = []
-            for code, ex in seen.items():
-                lines.append(f"• {ex.raw or ex.name or code} — ячейка {ex.cell or '—'}, НФ-код {ex.nf_code or '—'}")
-            messagebox.showinfo(
-                "Уже на складе",
-                f"{len(seen)} из {unique_count} позиций уже есть в {NEW_WAREHOUSE}.\n"
-                f"Количество будет прибавлено в существующую ячейку:\n\n" + "\n".join(lines))
+            seen_codes.add(it.code)
+            rows = self.store.new_by_code(it.code)
+            if rows:
+                cells = sorted({r.cell for r in rows if r.cell})
+                label = rows[0].raw or rows[0].name or it.raw or it.code
+                existing.append({"code": it.code, "label": label, "cells": cells})
+
+        cell_map: dict[str, str] = {}
+        if existing:
+            dlg = ReplenishChoiceDialog(self.root, existing)
+            self.root.wait_window(dlg)
+            if not dlg.result:
+                self.log("Пополнение отменено (выбор ячейки).")
+                return
+            cell_map = dlg.result
 
         if not result.ok:
             msg = ["Расхождения сверки ячейки Центрального склада:"]
@@ -468,7 +551,7 @@ class App:
                     msg.append(f"Ячейка {c.cell}: лишние — " + ", ".join(c.extra_in_move))
             if not messagebox.askyesno("Расхождение", "\n".join(msg) + "\n\nПровести всё равно (принять фактический состав)?"):
                 return
-        apply_movement(self.store, result, confirm_force=True)
+        apply_movement(self.store, result, confirm_force=True, cell_map=cell_map)
         if dups:
             dup_lines = "\n".join(
                 f"• {code} — {n} строки (суммировано)" for code, n in sorted(dups.items()))
@@ -826,7 +909,7 @@ class DBWindow(ctk.CTkToplevel):
             data = [(r.nf_code or r.code, r.raw, r.cell, r.code) for r in rows]
         else:
             rows = self.store.new_search(q) if q else self.store.new_all()
-            data = [(r.nf_code or "", r.raw, r.cell, r.qty, r.code) for r in rows]
+            data = [(r.nf_code or "", r.raw, r.cell, r.qty, r.id) for r in rows]
 
         col, reverse = self._sort[table]
         idx = {"code": 0, "name": 1, "cell": 2, "qty": 3}[col]
@@ -883,7 +966,7 @@ class DBWindow(ctk.CTkToplevel):
                 if not code:
                     messagebox.showwarning("Ошибка", "Не удалось извлечь код из наименования.")
                     return
-                self.store.new_upsert_full(code, raw, name, cell, qty, nf)
+                self.store.new_insert(code, raw, name, cell, qty, nf)
             self.refresh()
 
     def edit(self):
@@ -914,8 +997,7 @@ class DBWindow(ctk.CTkToplevel):
                 if not code:
                     messagebox.showwarning("Ошибка", "Не удалось извлечь код из наименования.")
                     return
-                self.store.new_delete(iid)
-                self.store.new_upsert_full(code, raw, name, cell, qty, nf)
+                self.store.new_update(int(iid), code, raw, name, cell, qty, nf)
         self.refresh()
 
     def delete(self):
@@ -931,7 +1013,7 @@ class DBWindow(ctk.CTkToplevel):
             if table == "old":
                 self.store.old_delete(iid)
             else:
-                self.store.new_delete(iid)
+                self.store.new_delete_id(int(iid))
         self.refresh()
 
     def move_cell(self):

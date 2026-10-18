@@ -87,15 +87,24 @@ def check_spec(store: Store, spec: list[SpecItem]) -> SpecResult:
                 cell=old.cell,
             ))
 
-        # новая база (синий склад) — наличие + списание
-        nw = store.new_get(code)
-        if nw is not None:
-            written = min(nw.qty, s.qty_needed)
-            after = round(nw.qty - written, 6)
-            store.new_set_qty(code, after)
+        # новая база (синий склад) — наличие + списание (по всем ячейкам)
+        nrows = store.new_by_code(code)
+        if nrows:
+            total = store.new_total(code)
+            written = min(total, s.qty_needed)
+            after = round(total - written, 6)
+            # списываем с ячеек по порядку (id), пока не выберем нужное
+            remaining = written
+            for r in nrows:
+                if remaining <= 0:
+                    break
+                take = min(r.qty, remaining)
+                store.new_set_qty_id(r.id, round(r.qty - take, 6))
+                remaining = round(remaining - take, 6)
+            cells = ", ".join(sorted({r.cell for r in nrows if r.cell})) or (nrows[0].cell or "")
             result.new_hits.append(SpecHit(
-                code=code, name=nw.name or nw.raw or s.name, qty_needed=s.qty_needed,
-                cell=nw.cell, qty_available=nw.qty, qty_after=after,
+                code=code, name=nrows[0].name or nrows[0].raw or s.name, qty_needed=s.qty_needed,
+                cell=cells, qty_available=total, qty_after=after,
             ))
 
     return result
