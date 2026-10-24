@@ -44,6 +44,17 @@ def normalize_code(text: str) -> str:
     return s.replace(" ", "")
 
 
+def base_code(code: str) -> str:
+    """Основание кода — всё до первого дефиса.
+
+    «Исполнение» — то, что после дефиса. Например:
+      09.040.00.00.03-02 -> 09.040.00.00.03
+      09.040.00.00.03    -> 09.040.00.00.03
+      01.07.00.00.05-01  -> 01.07.00.00.05
+    """
+    return (code or "").split("-", 1)[0]
+
+
 def first_code_token(name: str) -> str:
     """Первый токен наименования, содержащий цифру — это код детали."""
     import re
@@ -51,6 +62,14 @@ def first_code_token(name: str) -> str:
         if re.search(r"\d", tok):
             return tok
     return (name or "").split()[0] if (name or "").strip() else ""
+
+
+def split_full_name(raw_text: str) -> tuple[str, str]:
+    """«код Название» -> (код, название)."""
+    parts = (raw_text or "").strip().split(" ", 1)
+    code = normalize_code(parts[0]) if parts and parts[0] else ""
+    name = parts[1] if len(parts) > 1 else ""
+    return code, name
 
 
 def parse_qty(text: str) -> float | None:

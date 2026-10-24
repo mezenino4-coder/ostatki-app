@@ -17,6 +17,7 @@ import cv2
 import numpy as np
 
 from .normalize import normalize_code, parse_qty
+from .db import match_warehouse
 
 
 def load_image(path: str) -> np.ndarray:
@@ -108,8 +109,7 @@ class OcrResult:
     cell: str = ""
     rows_text: list[str] = field(default_factory=list)
     lines: list[str] = field(default_factory=list)  # полный текст строк (для отладки)
-    source: str = ""        # склад-отправитель: "shelf" | "central" | "" (из шапки)
-    source_name: str = ""   # имя склада-отправителя для отображения
+    warehouse: str = ""    # склад-получатель (Центральный синий / Бегоулево / "")
     missing_qty: list[str] = field(default_factory=list)  # позиции, где не распознано кол-во
 
 
@@ -168,20 +168,28 @@ def _find_cell(lines: list[str]) -> str:
     return ""
 
 
-def detect_source(lines: list[str]) -> tuple[str, str]:
-    """Определить склад-отправитель по тексту скрина.
+def _detect_warehouse_from_header(boxes: list[TextBox]) -> str:
+    """Склад-получатель из шапки «Склад: значение».
 
-    Возвращает (source, имя склада).
-      * "shelf"   — отправитель «Полка» (просто наполняем новую базу);
-      * "central" — иначе Центральный склад (списание со старой + сверка).
-
-    Ключевое слово — «полка»: оно появляется только когда отправитель — полка.
-    Получатель всегда «Центральный синий склад», поэтому его не путаем.
+    Находим метку «Склад:» слева (x<130) и читаем значение справа от неё
+    на той же строке, матчим по ключевым словам известных складов.
+    Колонку «Склад» в таблице НЕ используем (там отправитель).
     """
-    text = " ".join(lines or []).lower()
-    if "полка" in text:
-        return "shelf", "Полка"
-    return "central", "Центральный склад"
+    ordered = sorted(boxes, key=lambda b: (b.cy, b.cx))
+    label = None
+    for b in ordered:
+        t = (b.text or "").lower()
+        if b.x0 < 130 and ("скл" in t or "скп" in t):
+            label = b
+            break
+    if label is None:
+        return ""
+    for b in ordered:
+        if b.x0 >= label.x1 and abs(b.cy - label.cy) < 25:
+            w = match_warehouse(b.text or "")
+            if w:
+                return w
+    return ""
 
 
 def _strip_row_number(code: str) -> str:
@@ -330,7 +338,7 @@ def run_ocr(img: np.ndarray, models_dir: str | None = None) -> OcrResult:
     lines = [" ".join(b.text for b in r) for r in rows]
     res.lines = lines
     res.cell = _find_cell(lines)
-    res.source, res.source_name = _detect_source_from_header(boxes)
+    res.warehouse = _detect_warehouse_from_header(boxes)
 
     for r in rows:
         row_num = None

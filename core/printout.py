@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Формирование и печать документа «Задание на сборку»."""
+"""Формирование и печать документа «Задание на сборку» (по складам)."""
 from __future__ import annotations
 
 import os
@@ -7,7 +7,7 @@ import subprocess
 import sys
 import tempfile
 
-from .db import OLD_WAREHOUSE, NEW_WAREHOUSE
+from .db import BEGOULEVO, BLUE, WAREHOUSES
 from .spec import SpecResult
 
 
@@ -20,36 +20,22 @@ def _fmt(q) -> str:
     return f"{q:g}"
 
 
-def build_assembly_doc(result: SpecResult) -> str:
-    """Текст документа «Задание на сборку»: заголовок + 2 списка."""
-    lines = ["ЗАДАНИЕ НА СБОРКУ", "=" * 30, ""]
-
-    both_empty = not result.new_hits and not result.old_hits
-    if both_empty:
-        lines.append("На Центральном складе ничего нет.")
-        return "\n".join(lines)
-
-    # --- новая база (синий склад) ---
-    if result.new_hits:
-        lines.append(f"{NEW_WAREHOUSE}:")
-        for h in result.new_hits:
-            nm = h.name or h.code
-            lines.append(f"  {h.code}  {nm}  —  ячейка {h.cell or '-'}  —  нужно {_fmt(h.qty_needed)}")
-    else:
-        lines.append(f"На складе {NEW_WAREHOUSE} ничего нет.")
-    lines.append("")
-
-    # --- старая база (Центральный склад) ---
-    if result.old_hits:
-        lines.append(f"{OLD_WAREHOUSE}:")
-        for h in result.old_hits:
-            nm = h.name or h.code
-            lines.append(f"  {h.code}  {nm}  —  ячейка {h.cell or '-'}  —  нужно {_fmt(h.qty_needed)}")
-    else:
-        lines.append(f"На {OLD_WAREHOUSE} ничего нет.")
-    lines.append("")
-
-    return "\n".join(lines)
+def build_assembly_docs(result: SpecResult) -> dict[str, str]:
+    """Тексты задания на сборку — по одному на каждый склад (для печати 2 листов)."""
+    docs: dict[str, str] = {}
+    for wh in WAREHOUSES:
+        rows = [l for l in result.lines if l.warehouse == wh]
+        if not rows:
+            continue
+        lines = [f"ЗАДАНИЕ НА СБОРКУ  —  {wh}", "=" * 46, ""]
+        for l in rows:
+            nm = l.name or l.code
+            variant = "" if l.exact else "   [вариант — другое исполнение]"
+            lines.append(f"  {l.code}  {nm}")
+            lines.append(f"     ячейка {l.cell or '-'}   —   взять {_fmt(l.spec_qty)}{variant}")
+            lines.append("")
+        docs[wh] = "\n".join(lines)
+    return docs
 
 
 def list_printers() -> list[str]:
@@ -61,7 +47,6 @@ def list_printers() -> list[str]:
             return [p[2] for p in win32print.EnumPrinters(flags, None, 1)]
         except Exception:
             return []
-    # Linux/macOS
     try:
         out = subprocess.run(["lpstat", "-p"], capture_output=True, text=True, timeout=10)
         names = []
@@ -99,7 +84,6 @@ def print_text(text: str, filename: str = "zadanie_na_sborku.txt",
                     os.startfile(path, "print")
                     return True, path
                 finally:
-                    # вернуть принтер по умолчанию (после постановки в очередь)
                     try:
                         win32print.SetDefaultPrinter(prev)
                     except Exception:
@@ -120,7 +104,6 @@ def print_text(text: str, filename: str = "zadanie_na_sborku.txt",
             subprocess.run(cmd, check=True, timeout=30, capture_output=True)
             return True, path
         except Exception:
-            # fallback без выбора принтера
             try:
                 subprocess.run(["lpr", path], check=True, timeout=30, capture_output=True)
                 return True, path

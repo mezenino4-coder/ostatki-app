@@ -1,17 +1,17 @@
 # -*- coding: utf-8 -*-
-"""Проверка наличия деталей по спецификации + автосписание с новой базы.
+"""Проверка наличия деталей по спецификации (по двум складам).
 
-Вход: спецификация (список позиций {code, name, qty_needed}).
-Выход: два списка — что лежит на Центральном складе (старая база) и что
-на Центральном синем складе (новая база). Списание — автоматическое,
-только с НОВОЙ базы, по необходимому количеству.
+По каждому коду: сначала точное совпадение; если нет — предлагаем варианты
+в других «исполнениях» (тот же код до дефиса, напр. 09.040.00.00.03 /
+-01 / -02). Списание НЕ выполняем автоматически — только по кнопке «Выдать»
+(см. app.py), по отмеченным галочками строкам.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .db import OLD_WAREHOUSE, NEW_WAREHOUSE, Store
-from .normalize import first_code_token, normalize_code, parse_qty
+from .db import Store
+from .normalize import base_code, first_code_token, normalize_code, parse_qty
 
 
 @dataclass
@@ -22,20 +22,24 @@ class SpecItem:
 
 
 @dataclass
-class SpecHit:
-    """Найденная позиция на одном из складов."""
-    code: str
-    name: str
-    qty_needed: float
+class TaskLine:
+    """Строка задания на сборку — привязка к конкретной строке остатка."""
+    spec_code: str
+    spec_qty: float          # сколько нужно по спецификации
+    stock_id: int = 0        # id строки остатка (для списания)
+    code: str = ""           # фактический код (может быть вариантом)
+    name: str = ""
+    warehouse: str = ""
     cell: str = ""
-    qty_available: float = 0.0   # остаток (только новая база)
-    qty_after: float = 0.0       # остаток после списания (только новая база)
+    available: float = 0.0   # сколько лежит в этой ячейке
+    exact: bool = True       # True — точное совпадение, False — вариант
+    checked: bool = True
 
 
 @dataclass
 class SpecResult:
-    old_hits: list[SpecHit] = field(default_factory=list)  # Центральный склад (старая база)
-    new_hits: list[SpecHit] = field(default_factory=list)  # Синий (новая база)
+    lines: list[TaskLine] = field(default_factory=list)
+    not_found: list[SpecItem] = field(default_factory=list)
 
 
 def parse_spec_text(text: str) -> list[SpecItem]:
@@ -74,37 +78,31 @@ def parse_spec_text(text: str) -> list[SpecItem]:
 
 
 def check_spec(store: Store, spec: list[SpecItem]) -> SpecResult:
-    """Проверить наличие и списать (автоматически) с новой базы."""
+    """Проверить наличие по двум складам (без списания)."""
     result = SpecResult()
     for s in spec:
         code = normalize_code(s.code)
 
-        # старая база (Центральный склад) — только наличие + ячейка
-        old = store.old_by_code(code)
-        if old is not None:
-            result.old_hits.append(SpecHit(
-                code=code, name=old.name or s.name, qty_needed=s.qty_needed,
-                cell=old.cell,
-            ))
+        exact = store.stock_by_code(code)
+        if exact:
+            for r in exact:
+                result.lines.append(TaskLine(
+                    spec_code=code, spec_qty=s.qty_needed, stock_id=r.id,
+                    code=r.code, name=r.name or r.raw or s.name,
+                    warehouse=r.warehouse, cell=r.cell, available=r.qty,
+                    exact=True))
+            continue
 
-        # новая база (синий склад) — наличие + списание (по всем ячейкам)
-        nrows = store.new_by_code(code)
-        if nrows:
-            total = store.new_total(code)
-            written = min(total, s.qty_needed)
-            after = round(total - written, 6)
-            # списываем с ячеек по порядку (id), пока не выберем нужное
-            remaining = written
-            for r in nrows:
-                if remaining <= 0:
-                    break
-                take = min(r.qty, remaining)
-                store.new_set_qty_id(r.id, round(r.qty - take, 6))
-                remaining = round(remaining - take, 6)
-            cells = ", ".join(sorted({r.cell for r in nrows if r.cell})) or (nrows[0].cell or "")
-            result.new_hits.append(SpecHit(
-                code=code, name=nrows[0].name or nrows[0].raw or s.name, qty_needed=s.qty_needed,
-                cell=cells, qty_available=total, qty_after=after,
-            ))
+        variants = store.stock_by_base(base_code(code))
+        if variants:
+            for r in variants:
+                result.lines.append(TaskLine(
+                    spec_code=code, spec_qty=s.qty_needed, stock_id=r.id,
+                    code=r.code, name=r.name or r.raw or s.name,
+                    warehouse=r.warehouse, cell=r.cell, available=r.qty,
+                    exact=False))
+            continue
+
+        result.not_found.append(s)
 
     return result
