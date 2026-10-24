@@ -493,6 +493,7 @@ class App:
             lists = []
             source = ""
             source_name = ""
+            missing_qty = []
             for p in paths:
                 img = ocr.load_image(p)
                 img2, _ = ocr.deskew(img)
@@ -500,6 +501,7 @@ class App:
                 lists.append([MoveItem(code=it.code, raw=it.raw, qty=it.qty,
                                        nf_code=it.nf_code, cell=it.cell)
                               for it in res.items])
+                missing_qty.extend(res.missing_qty)
                 if not source and res.source:
                     source, source_name = res.source, res.source_name
             items = merge_items(lists)
@@ -566,18 +568,26 @@ class App:
             if not messagebox.askyesno("Расхождение", "\n".join(msg) + "\n\nПровести всё равно (принять фактический состав)?"):
                 return
         apply_movement(self.store, result, confirm_force=True, cell_map=cell_map)
+
+        parts = []
         if dups:
             dup_lines = "\n".join(
                 f"• {code} — {n} строки (суммировано)" for code, n in sorted(dups.items()))
-            messagebox.showinfo(
-                "Пополнение",
+            parts.append(
                 f"Готово: {unique_count} позиций добавлено в {NEW_WAREHOUSE}.\n\n"
                 f"В документе {len(items)} строк, из них {len(dups)} деталей "
                 f"повторяются дважды и объединены в одну (количество суммировано):\n\n"
                 f"{dup_lines}")
         else:
-            messagebox.showinfo("Пополнение",
-                                f"Готово: {unique_count} позиций добавлено в {NEW_WAREHOUSE}.")
+            parts.append(f"Готово: {unique_count} позиций добавлено в {NEW_WAREHOUSE}.")
+
+        if missing_qty:
+            mq_lines = "\n".join(f"• {m}" for m in missing_qty)
+            parts.append(
+                f"\n\n⚠️ Не распознано количество у {len(missing_qty)} поз. "
+                f"(добавлены с кол-вом 0 — поправьте в «База»):\n\n{mq_lines}")
+
+        messagebox.showinfo("Пополнение", "\n".join(parts))
 
     # ---------- 3. проверка наличия деталей (спецификация) ----------
     def load_spec(self):

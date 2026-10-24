@@ -110,6 +110,7 @@ class OcrResult:
     lines: list[str] = field(default_factory=list)  # полный текст строк (для отладки)
     source: str = ""        # склад-отправитель: "shelf" | "central" | "" (из шапки)
     source_name: str = ""   # имя склада-отправителя для отображения
+    missing_qty: list[str] = field(default_factory=list)  # позиции, где не распознано кол-во
 
 
 def _strip_name_suffix(code: str) -> str:
@@ -258,7 +259,10 @@ def _ocr_qty_column(img: np.ndarray, engine) -> list[tuple[float, float]]:
     их стабильно. Возвращает список (y_center, qty) в координатах img.
     """
     h, w = img.shape[:2]
-    x0, x1 = int(w * 0.302), int(w * 0.346)
+    # Узкая полоса ТОЛЬКО по цифрам колонки «Кол-во» (без колонки «Ед.»/«шт»).
+    # Если взять шире (до x~0.346), одиночная цифра «1»/«2» сливается с «шт»
+    # и не читается. Правая граница ~0.320 отсекает «шт» (x~0.32+).
+    x0, x1 = int(w * 0.302), int(w * 0.320)
     strip = img[:, x0:x1]
     big = cv2.resize(strip, None, fx=5.0, fy=5.0,
                      interpolation=cv2.INTER_CUBIC)
@@ -277,8 +281,12 @@ def _ocr_qty_column(img: np.ndarray, engine) -> list[tuple[float, float]]:
     return result
 
 
-def _qty_at_y(qty_col: list[tuple[float, float]], y: float, tol: float = 16.0):
-    """Ближайшее количество из колонки по y (в пределах tol пикселей)."""
+def _qty_at_y(qty_col: list[tuple[float, float]], y: float, tol: float = 10.0):
+    """Ближайшее количество из колонки по y (в пределах tol пикселей).
+
+    tol меньше половины межстрочного шага (~17px), чтобы при пропавшей цифре
+    НЕ подхватывать количество соседней строки.
+    """
     best = None
     best_d = tol
     for qy, q in qty_col:
@@ -371,6 +379,11 @@ def run_ocr(img: np.ndarray, models_dir: str | None = None) -> OcrResult:
             if q is not None:
                 qty = q
         if qty is None:
+            # НЕ роняем позицию: добавляем с количеством 0 и помечаем для ручной правки.
+            res.items.append(MoveItem(code=ncode, raw=nom, qty=0.0,
+                                      nf_code=nf_code, cell=cell))
+            res.rows_text.append(nom)
+            res.missing_qty.append(nom)
             continue
         res.items.append(MoveItem(code=ncode, raw=nom, qty=qty,
                                   nf_code=nf_code, cell=cell))
