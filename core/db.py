@@ -12,10 +12,45 @@
 from __future__ import annotations
 
 import os
+import shutil
 import sqlite3
+import sys
 from dataclasses import dataclass
 
-DEFAULT_DB = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ostatki.db")
+
+def _data_dir() -> str:
+    """Папка с данными приложения: рядом с exe (frozen) или корень проекта (dev)."""
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _bundled_db_path() -> str | None:
+    """Старый (ошибочный) путь к базе внутри пакета — для одноразовой миграции."""
+    meipass = getattr(sys, "_MEIPASS", None)
+    if not meipass:
+        return None
+    return os.path.join(meipass, "ostatki.db")
+
+
+DEFAULT_DB = os.path.join(_data_dir(), "ostatki.db")
+
+
+def _migrate_db_if_needed(path: str) -> None:
+    """Одноразовый перенос базы из _internal/ (старые сборки) рядом с exe."""
+    if os.path.exists(path):
+        return
+    bundled = _bundled_db_path()
+    if not bundled or not os.path.exists(bundled):
+        return
+    try:
+        shutil.copy2(bundled, path)
+        for suf in ("-wal", "-shm"):
+            s = bundled + suf
+            if os.path.exists(s):
+                shutil.copy2(s, path + suf)
+    except Exception:
+        pass
 
 # Имена складов (для отображения и печати)
 OLD_WAREHOUSE = "Центральный склад"          # старая база (уменьшается, не пополняется)
@@ -45,6 +80,8 @@ class NewRow:
 class Store:
     def __init__(self, path: str | None = None):
         self.path = path or DEFAULT_DB
+        if path is None:
+            _migrate_db_if_needed(self.path)
         self.conn = sqlite3.connect(self.path)
         self.conn.execute("PRAGMA journal_mode=WAL")
         self._init()

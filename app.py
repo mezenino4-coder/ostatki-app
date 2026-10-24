@@ -420,14 +420,28 @@ class App:
         threading.Thread(target=run, daemon=True).start()
 
     def _autoload_old(self):
-        """Автозагрузка старой базы (Центральный склад) из файла рядом с программой."""
+        """Автозагрузка старой базы (Центральный склад) из файла ostatki_po_skladu.tsv.
+
+        Ищем файл в двух местах:
+          1. рядом с exe (пользователь может обновить файл вручную);
+          2. внутри пакета (_MEIPASS) — для первого запуска после скачивания
+             (в onedir-сборке файл лежит в папке _internal).
+        """
         if self.store.old_count() > 0:
             return
-        base = (os.path.dirname(sys.executable)
-                if getattr(sys, "frozen", False)
-                else os.path.dirname(os.path.abspath(__file__)))
-        p = os.path.join(base, "ostatki_po_skladu.tsv")
-        if not os.path.exists(p):
+        candidates = []
+        if getattr(sys, "frozen", False):
+            candidates.append(os.path.join(os.path.dirname(sys.executable),
+                                           "ostatki_po_skladu.tsv"))
+            meipass = getattr(sys, "_MEIPASS", None)
+            if meipass:
+                candidates.append(os.path.join(meipass, "ostatki_po_skladu.tsv"))
+        else:
+            candidates.append(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                           "ostatki_po_skladu.tsv"))
+        p = next((c for c in candidates if os.path.exists(c)), None)
+        if not p:
+            self.log("[!] Файл старой базы ostatki_po_skladu.tsv не найден.")
             return
         try:
             n = importer.load_old_tsv(self.store, p)
